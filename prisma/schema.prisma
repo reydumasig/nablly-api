@@ -1,0 +1,181 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  employee
+  manager
+  admin
+}
+
+enum ClientType {
+  saas
+  gmv
+  both
+}
+
+enum ClientStatus {
+  active
+  inactive
+  pending
+}
+
+enum InvoiceType {
+  saas
+  setup
+  saas_setup
+  gmv_recharge
+}
+
+enum InvoiceStatus {
+  draft
+  submitted
+  maker_review
+  sent_back
+  checker_review
+  approved
+  invoice_generated
+  sent
+  paid
+  rejected
+}
+
+enum CommissionType {
+  saas
+  setup
+  saas_setup
+  gmv_flat
+  gmv_none
+}
+
+enum CommissionStatus {
+  pending
+  released
+}
+
+enum ReimbursementType {
+  collections
+  check_pickup
+  check_drop
+  facilitation_expenses
+}
+
+enum ReimbursementStatus {
+  pending
+  approved
+  rejected
+}
+
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  name       String
+  password   String
+  role       UserRole @default(employee)
+  employeeId String?  @unique @map("employee_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  invoices              Invoice[]         @relation("InvoiceRequestor")
+  auditLogs             InvoiceAuditLog[] @relation("AuditLogActor")
+  reimbursementsCreated Reimbursement[]   @relation("ReimbursementRequestor")
+  reimbursementsReviewed Reimbursement[]  @relation("ReimbursementReviewer")
+
+  @@map("users")
+}
+
+model Client {
+  id            String       @id @default(cuid())
+  companyName   String       @map("company_name")
+  type          ClientType
+  birNumber     String?      @map("bir_number")
+  address       String?
+  contactPerson String?      @map("contact_person")
+  contactEmail  String?      @map("contact_email")
+  contactNumber String?      @map("contact_number")
+  status        ClientStatus @default(pending)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  invoices Invoice[]
+
+  @@map("clients")
+}
+
+model Invoice {
+  id               String        @id @default(cuid())
+  requestorId      String        @map("requestor_id")
+  clientId         String        @map("client_id")
+  invoiceType      InvoiceType   @map("invoice_type")
+  amount           Decimal       @db.Decimal(12, 2)
+  dueDate          DateTime?     @map("due_date")
+  notes            String?
+  status           InvoiceStatus @default(draft)
+  commissionAmount Decimal?      @map("commission_amount") @db.Decimal(12, 2)
+  invoiceNumber    String?       @unique @map("invoice_number")
+  pdfUrl           String?       @map("pdf_url")
+  sentAt           DateTime?     @map("sent_at")
+  paidAt           DateTime?     @map("paid_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  requestor  User              @relation("InvoiceRequestor", fields: [requestorId], references: [id])
+  client     Client            @relation(fields: [clientId], references: [id])
+  auditLogs  InvoiceAuditLog[]
+  commission Commission?
+
+  @@map("invoices")
+}
+
+model InvoiceAuditLog {
+  id        String   @id @default(cuid())
+  invoiceId String   @map("invoice_id")
+  actorId   String   @map("actor_id")
+  action    String
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  actor   User    @relation("AuditLogActor", fields: [actorId], references: [id])
+
+  @@map("invoice_audit_logs")
+}
+
+model Commission {
+  id        String           @id @default(cuid())
+  invoiceId String           @unique @map("invoice_id")
+  amount    Decimal          @db.Decimal(12, 2)
+  type      CommissionType
+  status    CommissionStatus @default(pending)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("commissions")
+}
+
+model Reimbursement {
+  id          String              @id @default(cuid())
+  requestorId String              @map("requestor_id")
+  type        ReimbursementType
+  amount      Decimal             @db.Decimal(12, 2)
+  description String
+  receiptUrl  String?             @map("receipt_url")
+  notes       String?
+  status      ReimbursementStatus @default(pending)
+  reviewerId  String?             @map("reviewer_id")
+  reviewedAt  DateTime?           @map("reviewed_at")
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  requestor User  @relation("ReimbursementRequestor", fields: [requestorId], references: [id])
+  reviewer  User? @relation("ReimbursementReviewer", fields: [reviewerId], references: [id])
+
+  @@map("reimbursements")
+}
