@@ -37,6 +37,28 @@ app.get('/health', (c) =>
   }),
 )
 
+// ─── Debug endpoint (remove after confirming env is healthy) ─────────────────
+
+app.get('/debug/env', async (c) => {
+  const dbUrl = process.env.DATABASE_URL ?? ''
+  const { db } = await import('./lib/db.js')
+  let dbStatus = 'unknown'
+  try {
+    await db.$queryRaw`SELECT 1`
+    dbStatus = 'connected'
+  } catch (e: unknown) {
+    dbStatus = e instanceof Error ? e.message.slice(0, 120) : 'error'
+  }
+  return c.json({
+    DATABASE_URL_SET: !!dbUrl,
+    DATABASE_URL_PREFIX: dbUrl ? dbUrl.slice(0, 30) + '...' : 'NOT SET',
+    JWT_SECRET_SET: !!process.env.JWT_SECRET,
+    PORT: process.env.PORT,
+    NODE_ENV: process.env.NODE_ENV,
+    db: dbStatus,
+  })
+})
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 app.route('/api/v1/auth', authRoutes)
