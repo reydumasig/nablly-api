@@ -9,6 +9,7 @@ import clientRoutes from './routes/clients.js'
 import invoiceRoutes from './routes/invoices.js'
 import commissionRoutes from './routes/commissions.js'
 import reimbursementRoutes from './routes/reimbursements.js'
+import zohoRoutes from './routes/zoho.js'
 
 const app = new Hono()
 
@@ -66,6 +67,7 @@ app.route('/api/v1/clients', clientRoutes)
 app.route('/api/v1/invoices', invoiceRoutes)
 app.route('/api/v1/commissions', commissionRoutes)
 app.route('/api/v1/reimbursements', reimbursementRoutes)
+app.route('/zoho', zohoRoutes)           // mounted at /zoho (not /api/v1) to match Zoho redirect URI
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 
