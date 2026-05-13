@@ -16,6 +16,7 @@ const createClientSchema = z.object({
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   contactEmail: z.string().email().optional().or(z.literal('')),
+  altContactEmail: z.string().email().optional().or(z.literal('')),
   contactNumber: z.string().optional(),
   status: z.enum(['active', 'inactive', 'pending']).default('pending'),
 })
@@ -145,17 +146,18 @@ clients.post('/', requireRole('admin'), async (c) => {
       return c.json({ error: 'Validation error', details: parsed.error.flatten() }, 400)
     }
 
-    const { companyName, type, birNumber, address, contactPerson, contactEmail, contactNumber, status } = parsed.data
+    const { companyName, type, birNumber, address, contactPerson, contactEmail, altContactEmail, contactNumber, status } = parsed.data
 
     const client = await db.client.create({
       data: {
         companyName,
         type,
-        birNumber: birNumber ?? null,
-        address: address ?? null,
-        contactPerson: contactPerson ?? null,
-        contactEmail: contactEmail || null,
-        contactNumber: contactNumber ?? null,
+        birNumber:       birNumber       ?? null,
+        address:         address         ?? null,
+        contactPerson:   contactPerson   ?? null,
+        contactEmail:    contactEmail    || null,
+        altContactEmail: altContactEmail || null,
+        contactNumber:   contactNumber   ?? null,
         status,
       },
     })
@@ -191,8 +193,9 @@ clients.put('/:id', requireRole('admin'), async (c) => {
     if (d.birNumber !== undefined) updates.birNumber = d.birNumber
     if (d.address !== undefined) updates.address = d.address
     if (d.contactPerson !== undefined) updates.contactPerson = d.contactPerson
-    if (d.contactEmail !== undefined) updates.contactEmail = d.contactEmail || null
-    if (d.contactNumber !== undefined) updates.contactNumber = d.contactNumber
+    if (d.contactEmail !== undefined)    updates.contactEmail    = d.contactEmail    || null
+    if (d.altContactEmail !== undefined) updates.altContactEmail = d.altContactEmail || null
+    if (d.contactNumber !== undefined)   updates.contactNumber   = d.contactNumber
     if (d.status !== undefined) updates.status = d.status
 
     const client = await db.client.update({
