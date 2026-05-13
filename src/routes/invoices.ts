@@ -4,6 +4,7 @@ import { db } from '../lib/db.js'
 import { calcCommission } from '../lib/commission.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { requireRole } from '../middleware/roles.js'
+import { isZohoConfigured, findOrCreateContact, createZohoInvoice, sendZohoInvoice } from '../lib/zoho.js'
 import type { InvoiceStatus, CommissionType } from '@prisma/client'
 
 const invoices = new Hono()
@@ -75,12 +76,23 @@ async function transitionInvoice(
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
+const lineItemSchema = z.object({
+  description: z.string(),
+  class: z.string(),
+  qty: z.number(),
+  unitPrice: z.number(),
+  date: z.string().optional(),
+})
+
 const createInvoiceSchema = z.object({
   clientId: z.string().min(1, 'Client ID is required'),
   invoiceType: z.enum(['saas', 'setup', 'saas_setup', 'gmv_recharge']),
   amount: z.number().positive('Amount must be positive'),
   dueDate: z.string().datetime().optional(),
   notes: z.string().optional(),
+  lineItems: z.array(lineItemSchema).optional(),
+  billingDate: z.string().optional(),
+  paymentTerms: z.string().optional(),
 })
 
 const commentSchema = z.object({
@@ -208,7 +220,7 @@ invoices.post('/', requireRole('employee'), async (c) => {
       return c.json({ error: 'Validation error', details: parsed.error.flatten() }, 400)
     }
 
-    const { clientId, invoiceType, amount, dueDate, notes } = parsed.data
+    const { clientId, invoiceType, amount, dueDate, notes, lineItems, billingDate, paymentTerms } = parsed.data
 
     // Verify client exists
     const client = await db.client.findUnique({ where: { id: clientId } })
@@ -226,6 +238,9 @@ invoices.post('/', requireRole('employee'), async (c) => {
           dueDate: dueDate ? new Date(dueDate) : null,
           notes: notes ?? null,
           status: 'draft',
+          lineItemsJson: lineItems ? lineItems as unknown as import('@prisma/client').Prisma.InputJsonValue : undefined,
+          billingDate: billingDate ? new Date(billingDate) : null,
+          paymentTerms: paymentTerms ?? null,
         },
         include: {
           requestor: { select: { id: true, name: true, email: true } },
@@ -424,13 +439,13 @@ invoices.post('/:id/final-approve', requireRole('admin'), async (c) => {
   }
 })
 
-// POST /invoices/:id/generate-pdf — admin generates PDF
+// POST /invoices/:id/generate-pdf — admin generates PDF via Zoho Books
 invoices.post('/:id/generate-pdf', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user')
     const { id } = c.req.param()
 
-    const invoice = await db.invoice.findUnique({ where: { id } })
+    const invoice = await db.invoice.findUnique({ where: { id }, include: { client: true } })
     if (!invoice) return c.json({ error: 'Invoice not found' }, 404)
 
     if (invoice.status !== 'approved') {
@@ -441,7 +456,54 @@ invoices.post('/:id/generate-pdf', requireRole('admin'), async (c) => {
     }
 
     const invoiceNumber = await generateInvoiceNumber()
-    // Placeholder PDF URL — replace with actual PDF generation service (e.g. Puppeteer, PDFKit)
+
+    if (isZohoConfigured()) {
+      try {
+        // Find or create Zoho contact for the client
+        const contactId = await findOrCreateContact(invoice.client)
+
+        // Parse line items from DB or build a fallback single item
+        type LineItemRecord = { description: string; class: string; qty: number; unitPrice: number }
+        const storedItems = invoice.lineItemsJson as LineItemRecord[] | null
+        const zohoLineItems = storedItems && storedItems.length > 0
+          ? storedItems.map(item => ({
+              name: item.class || invoice.invoiceType,
+              description: item.description,
+              quantity: item.qty,
+              rate: item.unitPrice,
+            }))
+          : [{
+              name: invoice.invoiceType,
+              description: invoice.notes ?? invoice.invoiceType,
+              quantity: 1,
+              rate: Number(invoice.amount),
+            }]
+
+        const { zohoInvoiceId, zohoInvoiceUrl } = await createZohoInvoice({
+          contactId,
+          invoiceNumber,
+          dueDate: invoice.dueDate,
+          lineItems: zohoLineItems,
+          notes: invoice.notes ?? undefined,
+        })
+
+        const updated = await transitionInvoice(
+          id,
+          user.id,
+          'invoice_generated',
+          'pdf_generated',
+          `Invoice number ${invoiceNumber} generated via Zoho Books`,
+          { invoiceNumber, pdfUrl: zohoInvoiceUrl, zohoInvoiceId, zohoInvoiceUrl },
+        )
+
+        return c.json({ data: updated, message: `PDF generated: ${invoiceNumber}` })
+      } catch (zohoErr) {
+        console.error('Zoho invoice creation failed:', zohoErr)
+        return c.json({ error: `Zoho error: ${(zohoErr as Error).message}` }, 502)
+      }
+    }
+
+    // Fallback: placeholder when Zoho is not configured
     const pdfUrl = `/pdfs/${invoiceNumber}.pdf`
 
     const updated = await transitionInvoice(
@@ -460,13 +522,13 @@ invoices.post('/:id/generate-pdf', requireRole('admin'), async (c) => {
   }
 })
 
-// POST /invoices/:id/send — admin marks invoice as sent
+// POST /invoices/:id/send — admin marks invoice as sent (and emails via Zoho if configured)
 invoices.post('/:id/send', requireRole('admin'), async (c) => {
   try {
     const user = c.get('user')
     const { id } = c.req.param()
 
-    const invoice = await db.invoice.findUnique({ where: { id } })
+    const invoice = await db.invoice.findUnique({ where: { id }, include: { client: true } })
     if (!invoice) return c.json({ error: 'Invoice not found' }, 404)
 
     if (invoice.status !== 'invoice_generated') {
@@ -474,6 +536,19 @@ invoices.post('/:id/send', requireRole('admin'), async (c) => {
         { error: `Cannot mark invoice as sent in status '${invoice.status}'. Expected: invoice_generated` },
         422,
       )
+    }
+
+    // Send via Zoho if configured and we have a Zoho invoice ID
+    if (invoice.zohoInvoiceId && isZohoConfigured()) {
+      const clientEmail = invoice.client.contactEmail
+      if (clientEmail) {
+        try {
+          await sendZohoInvoice(invoice.zohoInvoiceId, clientEmail)
+        } catch (zohoErr) {
+          console.error('Zoho send invoice failed:', zohoErr)
+          // Non-fatal: log error but continue to mark as sent
+        }
+      }
     }
 
     const updated = await transitionInvoice(
