@@ -181,7 +181,9 @@ export async function createZohoInvoice(params: {
 
   if (params.notes) body.notes = params.notes
 
-  const result  = await zohoFetch('POST', '/invoices', body)
+  // ignore_auto_number_generation=true lets us supply our own invoice number
+  // even when Zoho Books has auto-numbering enabled on the org.
+  const result  = await zohoFetch('POST', '/invoices?ignore_auto_number_generation=true', body)
   const invoice = result.invoice as Record<string, unknown> | undefined
 
   if (!invoice?.invoice_id) {
