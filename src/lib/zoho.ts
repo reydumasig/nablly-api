@@ -135,7 +135,9 @@ export async function findOrCreateContact(client: {
   const result = await zohoFetch('POST', '/contacts', payload)
   const contact = result.contact as Record<string, unknown> | undefined
   if (!contact?.contact_id) {
-    throw new Error(`Failed to create Zoho contact: ${JSON.stringify(result)}`)
+    const message = (result.message as string) ?? JSON.stringify(result)
+    const code    = result.code as number | undefined
+    throw new Error(`Zoho contact creation failed [code ${code ?? '?'}]: ${message}`)
   }
 
   return contact.contact_id as string
@@ -183,7 +185,9 @@ export async function createZohoInvoice(params: {
   const invoice = result.invoice as Record<string, unknown> | undefined
 
   if (!invoice?.invoice_id) {
-    throw new Error(`Failed to create Zoho invoice: ${JSON.stringify(result)}`)
+    const message = (result.message as string) ?? JSON.stringify(result)
+    const code    = result.code as number | undefined
+    throw new Error(`Zoho invoice creation failed [code ${code ?? '?'}]: ${message}`)
   }
 
   return {
