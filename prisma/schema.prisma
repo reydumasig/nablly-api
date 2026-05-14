@@ -29,6 +29,7 @@ enum InvoiceType {
   saas
   setup
   saas_setup
+  adhoc
   gmv_recharge
 }
 
@@ -49,6 +50,7 @@ enum CommissionType {
   saas
   setup
   saas_setup
+  adhoc
   gmv_flat
   gmv_none
 }

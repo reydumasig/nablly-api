@@ -1,4 +1,4 @@
-export type CommissionTypeLiteral = 'saas' | 'setup' | 'saas_setup' | 'gmv_flat' | 'gmv_none'
+export type CommissionTypeLiteral = 'saas' | 'setup' | 'saas_setup' | 'adhoc' | 'gmv_flat' | 'gmv_none'
 
 export type CommissionResult = {
   amount: number
@@ -9,7 +9,7 @@ export type CommissionResult = {
  * Calculate commission for an invoice based on type and amount.
  *
  * Rules:
- * - saas / setup / saas_setup: 5% of invoice amount
+ * - saas / setup / adhoc: 5% of invoice amount
  * - gmv_recharge > ₱50,000: ₱1,000 flat fee
  * - gmv_recharge ≤ ₱50,000: ₱0
  */
@@ -21,8 +21,8 @@ export function calcCommission(invoiceType: string, amount: number): CommissionR
     case 'setup':
       return { amount: parseFloat((amount * 0.05).toFixed(2)), type: 'setup' }
 
-    case 'saas_setup':
-      return { amount: parseFloat((amount * 0.05).toFixed(2)), type: 'saas_setup' }
+    case 'adhoc':
+      return { amount: parseFloat((amount * 0.05).toFixed(2)), type: 'adhoc' }
 
     case 'gmv_recharge':
       if (amount > 50000) {

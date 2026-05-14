@@ -86,7 +86,7 @@ const lineItemSchema = z.object({
 
 const createInvoiceSchema = z.object({
   clientId: z.string().min(1, 'Client ID is required'),
-  invoiceType: z.enum(['saas', 'setup', 'saas_setup', 'gmv_recharge']),
+  invoiceType: z.enum(['saas', 'setup', 'adhoc', 'gmv_recharge']),
   amount: z.number().positive('Amount must be positive'),
   dueDate: z.string().datetime().optional(),
   notes: z.string().optional(),
