@@ -65,12 +65,29 @@ enum ReimbursementType {
   check_pickup
   check_drop
   facilitation_expenses
+  invoice_facilitation
+  banking_facilitation
+  client_coordination
+  courier_services
+  government_processing
+  transportation
+  compliance_processing
+  miscellaneous
 }
 
 enum ReimbursementStatus {
-  pending
+  draft
+  submitted
+  under_review
+  clarification_needed
+  pending_final
   approved
   rejected
+  published_to_xoxoday
+  in_reconciliation
+  closed
+  // legacy — kept so existing rows don't break
+  pending
 }
 
 model User {
@@ -87,6 +104,8 @@ model User {
   auditLogs             InvoiceAuditLog[] @relation("AuditLogActor")
   reimbursementsCreated Reimbursement[]   @relation("ReimbursementRequestor")
   reimbursementsReviewed Reimbursement[]  @relation("ReimbursementReviewer")
+  reimbursementsFinanceReviewed Reimbursement[] @relation("ReimbursementFinanceReviewer")
+  reimbursementAuditLogs ReimbursementAuditLog[] @relation("ReimbursementAuditLogActor")
 
   @@map("users")
 }
@@ -169,21 +188,50 @@ model Commission {
 }
 
 model Reimbursement {
-  id          String              @id @default(cuid())
-  requestorId String              @map("requestor_id")
-  type        ReimbursementType
-  amount      Decimal             @db.Decimal(12, 2)
-  description String
-  receiptUrl  String?             @map("receipt_url")
-  notes       String?
-  status      ReimbursementStatus @default(pending)
-  reviewerId  String?             @map("reviewer_id")
-  reviewedAt  DateTime?           @map("reviewed_at")
-  createdAt   DateTime            @default(now()) @map("created_at")
-  updatedAt   DateTime            @updatedAt @map("updated_at")
+  id                  String              @id @default(cuid())
+  displayId           String?             @unique @map("display_id")
+  requestorId         String              @map("requestor_id")
+  type                ReimbursementType
+  expenseCategory     String?             @map("expense_category")
+  expenseDate         DateTime?           @map("expense_date")
+  amount              Decimal             @db.Decimal(12, 2)
+  currency            String              @default("PHP")
+  description         String
+  clientIdRef         String?             @map("client_id_ref")
+  clientNameRef       String?             @map("client_name_ref")
+  relatedInvoiceId    String?             @map("related_invoice_id")
+  receiptUrl          String?             @map("receipt_url")
+  invoiceUrl          String?             @map("invoice_url")
+  supportingDocUrl    String?             @map("supporting_doc_url")
+  notes               String?
+  status              ReimbursementStatus @default(draft)
+  // Stage 1 — Finance reviewer
+  financeReviewerId   String?             @map("finance_reviewer_id")
+  financeReviewedAt   DateTime?           @map("finance_reviewed_at")
+  // Stage 2 — Final approver
+  reviewerId          String?             @map("reviewer_id")
+  reviewedAt          DateTime?           @map("reviewed_at")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
 
-  requestor User  @relation("ReimbursementRequestor", fields: [requestorId], references: [id])
-  reviewer  User? @relation("ReimbursementReviewer", fields: [reviewerId], references: [id])
+  requestor       User  @relation("ReimbursementRequestor", fields: [requestorId], references: [id])
+  financeReviewer User? @relation("ReimbursementFinanceReviewer", fields: [financeReviewerId], references: [id])
+  reviewer        User? @relation("ReimbursementReviewer", fields: [reviewerId], references: [id])
+  auditLogs       ReimbursementAuditLog[]
 
   @@map("reimbursements")
+}
+
+model ReimbursementAuditLog {
+  id              String   @id @default(cuid())
+  reimbursementId String   @map("reimbursement_id")
+  actorId         String   @map("actor_id")
+  action          String
+  comment         String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  reimbursement Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+  actor         User          @relation("ReimbursementAuditLogActor", fields: [actorId], references: [id])
+
+  @@map("reimbursement_audit_logs")
 }
