@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { db } from '../lib/db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { requireRole } from '../middleware/roles.js'
+import { uploadDocument, getSignedUrl, type DocumentSlot } from '../lib/storage.js'
 import type { ReimbursementStatus } from '@prisma/client'
 
 const reimbursements = new Hono()
@@ -56,6 +57,16 @@ async function generateDisplayId(): Promise<string> {
   })
   const seq = String(count + 1).padStart(4, '0')
   return `REIMB-${ym}-${seq}`
+}
+
+/** Enrich a raw DB record with signed download URLs for documents */
+async function withSignedUrls<T extends { invoiceUrl?: string | null; receiptUrl?: string | null; supportingDocUrl?: string | null }>(r: T) {
+  const [invoiceUrl, receiptUrl, supportingDocUrl] = await Promise.all([
+    getSignedUrl(r.invoiceUrl),
+    getSignedUrl(r.receiptUrl),
+    getSignedUrl(r.supportingDocUrl),
+  ])
+  return { ...r, invoiceUrl, receiptUrl, supportingDocUrl }
 }
 
 const REIMBURSEMENT_INCLUDE = {
@@ -112,7 +123,8 @@ reimbursements.get('/', async (c) => {
       }),
     ])
 
-    return c.json({ data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) }, message: 'Reimbursements retrieved' })
+    const signed = await Promise.all(data.map(withSignedUrls))
+    return c.json({ data: signed, meta: { total, page, limit, totalPages: Math.ceil(total / limit) }, message: 'Reimbursements retrieved' })
   } catch (err) {
     console.error('List reimbursements error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -135,7 +147,7 @@ reimbursements.get('/:id', async (c) => {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    return c.json({ data: reimbursement, message: 'Reimbursement retrieved' })
+    return c.json({ data: await withSignedUrls(reimbursement), message: 'Reimbursement retrieved' })
   } catch (err) {
     console.error('Get reimbursement error:', err)
     return c.json({ error: 'Internal server error' }, 500)
@@ -180,9 +192,82 @@ reimbursements.post('/', async (c) => {
 
     await writeAudit(reimbursement.id, user.id, 'created', 'Draft created')
 
-    return c.json({ data: reimbursement, message: 'Reimbursement draft created' }, 201)
+    return c.json({ data: await withSignedUrls(reimbursement), message: 'Reimbursement draft created' }, 201)
   } catch (err) {
     console.error('Create reimbursement error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── POST /:id/upload — attach documents to a reimbursement ──────────────────
+// Accepts multipart/form-data with fields: invoice, receipt, supporting (optional)
+// Uploads each file to Supabase Storage and writes the storage paths to the DB.
+// Can be called on a draft (before submit) or any editable state.
+reimbursements.post('/:id/upload', async (c) => {
+  try {
+    const user = c.get('user')
+    const { id } = c.req.param()
+
+    const r = await db.reimbursement.findUnique({ where: { id } })
+    if (!r) return c.json({ error: 'Not found' }, 404)
+
+    // Only requestor or admin/manager can upload documents
+    if (user.role === 'employee' && r.requestorId !== user.id) {
+      return c.json({ error: 'Forbidden' }, 403)
+    }
+
+    // Parse multipart body
+    const formData = await c.req.formData()
+    const slots: DocumentSlot[] = ['invoice', 'receipt', 'supporting']
+    const updates: Partial<{ invoiceUrl: string; receiptUrl: string; supportingDocUrl: string }> = {}
+    const uploaded: string[] = []
+    const errors: string[] = []
+
+    for (const slot of slots) {
+      const file = formData.get(slot)
+      if (!file || typeof file === 'string') continue
+
+      const f = file as File
+      if (!f.size) continue
+
+      try {
+        const buffer = Buffer.from(await f.arrayBuffer())
+        const path = await uploadDocument(id, slot, f.name, buffer, f.type || 'application/octet-stream')
+
+        if (slot === 'invoice')    updates.invoiceUrl     = path
+        if (slot === 'receipt')    updates.receiptUrl     = path
+        if (slot === 'supporting') updates.supportingDocUrl = path
+        uploaded.push(slot)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Upload failed'
+        errors.push(`${slot}: ${msg}`)
+      }
+    }
+
+    if (uploaded.length === 0 && errors.length > 0) {
+      return c.json({ error: 'All uploads failed', details: errors }, 422)
+    }
+
+    // Persist storage paths
+    const updated = await db.reimbursement.update({
+      where: { id },
+      data: updates,
+      include: REIMBURSEMENT_INCLUDE,
+    })
+
+    if (uploaded.length > 0) {
+      await writeAudit(id, user.id, 'documents_uploaded', `Uploaded: ${uploaded.join(', ')}`)
+    }
+
+    const response = await withSignedUrls(updated)
+    return c.json({
+      data: response,
+      uploaded,
+      errors: errors.length ? errors : undefined,
+      message: `${uploaded.length} document(s) uploaded${errors.length ? `, ${errors.length} failed` : ''}`,
+    })
+  } catch (err) {
+    console.error('Upload documents error:', err)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })
