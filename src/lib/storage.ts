@@ -6,6 +6,7 @@
  * URLs:   signed, 7-day expiry (re-generated on each fetch)
  */
 import { createClient } from '@supabase/supabase-js'
+import ws from 'ws'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -16,6 +17,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
+  // Node 20 has no native WebSocket — provide the ws polyfill
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  realtime: { transport: ws as any },
 })
 
 export const BUCKET = 'reimbursements'
