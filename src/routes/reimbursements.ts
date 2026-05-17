@@ -4,6 +4,7 @@ import { db } from '../lib/db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { requireRole } from '../middleware/roles.js'
 import { uploadDocument, getSignedUrl, type DocumentSlot } from '../lib/storage.js'
+import { runAiValidation, overrideValidation } from '../lib/aiValidation.js'
 import type { ReimbursementStatus } from '@prisma/client'
 
 const reimbursements = new Hono()
@@ -260,8 +261,22 @@ reimbursements.post('/:id/upload', async (c) => {
     }
 
     const response = await withSignedUrls(updated)
+
+    // ── Trigger AI validation asynchronously (don't block the response) ──
+    if (uploaded.length > 0) {
+      // Mark as pending immediately so the UI shows a spinner
+      await db.reimbursement.update({
+        where: { id },
+        data: { aiValidationStatus: 'pending' },
+      })
+      // Fire-and-forget — result written back to DB by runAiValidation
+      runAiValidation(id).catch((err) =>
+        console.error('AI validation failed for', id, err),
+      )
+    }
+
     return c.json({
-      data: response,
+      data: { ...response, aiValidationStatus: uploaded.length > 0 ? 'pending' : response.aiValidationStatus },
       uploaded,
       errors: errors.length ? errors : undefined,
       message: `${uploaded.length} document(s) uploaded${errors.length ? `, ${errors.length} failed` : ''}`,
@@ -526,6 +541,52 @@ reimbursements.put('/:id/close', requireRole('admin'), async (c) => {
     return c.json({ data: updated, message: 'Reimbursement closed' })
   } catch (err) {
     console.error('Close error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── POST /:id/revalidate — manually re-run AI validation ────────────────────
+reimbursements.post('/:id/revalidate', requireRole('manager', 'admin'), async (c) => {
+  try {
+    const { id } = c.req.param()
+
+    const r = await db.reimbursement.findUnique({ where: { id } })
+    if (!r) return c.json({ error: 'Not found' }, 404)
+
+    // Mark pending immediately
+    await db.reimbursement.update({
+      where: { id },
+      data: { aiValidationStatus: 'pending' },
+    })
+
+    // Run synchronously so caller gets the result
+    const result = await runAiValidation(id)
+    return c.json({ data: result, message: 'Validation complete' })
+  } catch (err) {
+    console.error('Revalidate error:', err)
+    return c.json({ error: 'Internal server error' }, 500)
+  }
+})
+
+// ─── PUT /:id/override-validation — Finance overrides failed/warning result ──
+reimbursements.put('/:id/override-validation', requireRole('manager', 'admin'), async (c) => {
+  try {
+    const user   = c.get('user')
+    const { id } = c.req.param()
+    const body   = await c.req.json()
+    const parsed = z.object({ note: z.string().min(1, 'Override note is required') }).safeParse(body)
+    if (!parsed.success) return c.json({ error: 'Override note is required', details: parsed.error.flatten() }, 400)
+
+    const r = await db.reimbursement.findUnique({ where: { id } })
+    if (!r) return c.json({ error: 'Not found' }, 404)
+
+    await overrideValidation(id, parsed.data.note)
+    await writeAudit(id, user.id, 'validation_overridden', `Override: ${parsed.data.note}`)
+
+    const updated = await db.reimbursement.findUnique({ where: { id }, include: REIMBURSEMENT_INCLUDE })
+    return c.json({ data: await withSignedUrls(updated!), message: 'Validation overridden' })
+  } catch (err) {
+    console.error('Override validation error:', err)
     return c.json({ error: 'Internal server error' }, 500)
   }
 })

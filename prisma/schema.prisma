@@ -60,6 +60,14 @@ enum CommissionStatus {
   released
 }
 
+enum AiValidationStatus {
+  pending
+  passed
+  warning
+  failed
+  skipped
+}
+
 enum ReimbursementType {
   collections
   check_pickup
@@ -211,6 +219,10 @@ model Reimbursement {
   // Stage 2 — Final approver
   reviewerId          String?             @map("reviewer_id")
   reviewedAt          DateTime?           @map("reviewed_at")
+  // AI Validation (Sprint 3)
+  aiValidationStatus  AiValidationStatus? @map("ai_validation_status")
+  aiValidationData    Json?               @map("ai_validation_data")
+  aiValidatedAt       DateTime?           @map("ai_validated_at")
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
 
